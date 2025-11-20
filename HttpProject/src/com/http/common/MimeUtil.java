@@ -1,1 +1,4 @@
-package com.http.common;
+package common;
+public class MimeUtil {
+
+}

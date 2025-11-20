@@ -1,1 +1,3 @@
-package com.http.server;
+package server;
+public class HttpServer {
+}

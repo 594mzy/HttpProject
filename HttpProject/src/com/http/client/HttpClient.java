@@ -1,1 +1,4 @@
-package com.http.client;
+package client;
+
+public class HttpClient {
+}
