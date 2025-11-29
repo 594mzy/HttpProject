@@ -3,7 +3,7 @@
 基于 Java 原生 Socket API 开发的轻量级 HTTP 客户端与服务器，支持 HTTP 基础请求响应、长连接、状态码处理及注册登录功能，无任何第三方框架依赖，纯原生实现。
 
 ## 项目介绍
-
+😿
 
 
 ## 技术栈
@@ -43,14 +43,33 @@ cd HttpProject
 plaintext
 
 ```plaintext
-HttpProject/
-├─ src/
-│  ├─ common/        # 公共工具类（请求/响应封装、解析工具）
-│  ├─ server/        # 服务器端代码（核心逻辑、接口实现）
-│  ├─ client/        # 客户端代码（请求发送、响应处理）
-│  ├─ test/          # 测试类（快速验证功能）
-│  └─ resources/static/       # 静态资源（HTML、文本、图片）
-└─ README.md                  # 项目说明文档
+HttpProject
+├─ src
+│  ├─ com.http.common
+│  │  ├─ Request.java
+│  │  ├─ Response.java
+│  │  ├─ ParamParser.java
+│  │  ├─ UrlParser.java
+│  │  └─ MimeUtil.java
+│  ├─ com.http.server
+│  │  ├─ HttpServer.java
+│  │  ├─ ClientHandler.java
+│  │  ├─ RequestParser.java
+│  │  ├─ ResponseUtil.java
+│  │  ├─ ResourceHandler.java
+│  │  └─ UserHandler.java
+│  ├─ com.http.client
+│  │  ├─ HttpClient.java
+│  │  ├─ ResponseParser.java
+│  │  └─ RedirectHandler.java
+│  ├─ com.http.test
+│  │  └─ ApiTest.java
+│  └─ resources
+│     └─ static
+│        ├─ index.html
+│        ├─ test.txt
+│        └─ test.png
+└─ README.md
 ```
 
 ## 开发团队
