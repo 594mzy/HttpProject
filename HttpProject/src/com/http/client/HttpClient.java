@@ -1,4 +1,4 @@
-package com.http.client;
+package client;
 
 import java.io.*;
 import java.net.Socket;
