@@ -1,199 +1,186 @@
-package client;
+package com.http.client;
 
-// 导入BIO传输工具类：基于阻塞IO（BIO）实现Socket数据发送/接收
-import common.BIOTransport;
-// 导入响应实体类：封装HTTP响应数据（状态码、头信息、响应体等）
-import common.Response;
-// 导入Socket池工具类：管理Socket连接复用（这里池大小固定为1）
-import common.SocketPool;
-// 导入URL解析工具类：解析URL中的协议、主机、端口、路径等信息
-import common.UrlParser;
-// 导入URL解析结果封装类：存储解析后的URL各部分（scheme、host、port、path等）
-import common.UrlParser.UrlInfo;
-
-// 导入IO异常类：处理流操作、Socket连接等IO相关异常
-import java.io.IOException;
-// 导入URI语法异常类：处理URL格式非法的异常
-import java.net.URISyntaxException;
-// 导入标准字符集：用于HTTP请求字符串转字节（UTF-8编码，HTTP协议默认）
-import java.nio.charset.StandardCharsets;
-// 导入Map接口：用于遍历响应头的键值对
+import java.io.*;
+import java.net.Socket;
+import java.util.HashMap;
 import java.util.Map;
-// 导入并发哈希表：线程安全的Map实现，用于缓存GET请求响应（支持多线程并发访问）
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Set;
 
-/**
- * 简单HTTP客户端：支持GET请求、自动重定向、本地缓存、条件请求（If-None-Match/If-Modified-Since）
- * 核心特性：
- * 1. 基于BIO+Socket池实现TCP连接通信
- * 2. 最大5次重定向限制（防止循环重定向）
- * 3. 内存缓存GET请求响应（键为URL）
- * 4. 支持304 Not Modified缓存复用（减少带宽消耗）
- * 5. 兼容绝对路径、根相对路径、相对路径的重定向Location
- */
 public class HttpClient {
-    // 最大重定向次数：限制为5次，避免因循环重定向导致无限循环
-    private final int maxRedirects = 5;
-    // GET请求响应缓存：线程安全的ConcurrentHashMap，键为请求URL，值为对应的响应对象
-    // 仅缓存GET请求（符合HTTP缓存语义，GET请求默认幂等可缓存）
-    private final Map<String, Response> cache = new ConcurrentHashMap<>();
 
     /**
-     * 无参构造方法：初始化HTTP客户端（默认初始化缓存和重定向配置）
+     * 发送 GET 请求
+     * @param url 目标 URL（如 http://localhost:8080/login?name=test）
+     * @return 服务器返回的完整响应（响应头 + 响应体）
      */
-    public HttpClient() {
+    public String sendGet(String url) {
+        try {
+            // 1. 解析 URL，获取 host、port、uri
+            Map<String, String> urlInfo = parseUrl(url);
+            String host = urlInfo.get("host");//主机：localhost
+            int port = Integer.parseInt(urlInfo.get("port"));//端口：8080
+            String uri = urlInfo.get("uri");//路径+参数
+
+            // 2. 创建 Socket 连接服务器
+            Socket socket = new Socket(host, port);
+
+            // 3. 构建 GET 请求头（按 HTTP 规范，每行以 \r\n 结尾，最后加空行）
+            StringBuilder request = new StringBuilder();
+            request.append("GET ").append(uri).append(" HTTP/1.1\r\n"); // 请求行
+            request.append("Host: ").append(host).append(":").append(port).append("\r\n"); // Host 头
+            request.append("Connection: close\r\n"); // 告诉服务器处理完关闭连接
+            request.append("\r\n"); // 空行表示请求头结束
+
+            // 4. 发送请求
+            OutputStream outputStream = socket.getOutputStream();
+            outputStream.write(request.toString().getBytes());
+            outputStream.flush();
+
+            // 5. 接收响应
+            String response = readResponse(socket.getInputStream());
+
+            // 6. 关闭连接
+            socket.close();
+            return response;
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "请求失败：" + e.getMessage();
+        }
     }
 
     /**
-     * 发送HTTP GET请求，自动处理重定向、缓存、条件请求
-     * @param url 目标请求URL（支持http协议，如http://localhost:8080/index.html）
-     * @return 最终的HTTP响应对象（可能是缓存响应或新请求的响应）
-     * @throws IOException 当Socket连接失败、流操作异常、URL格式非法时抛出
-     * @throws InterruptedException 当线程在等待Socket连接时被中断抛出
+     * 发送 POST 请求
+     * @param url 目标 URL（如 http://localhost:8080/register）
+     * @param params POST 参数（如 {name: "test", pwd: "123"}）
+     * @return 服务器返回的完整响应
      */
-    public Response get(String url) throws IOException, InterruptedException {
-        // 当前请求的URL（初始为传入的url，重定向时会更新为新地址）
-        String current = url;
-        // 已重定向次数计数器（初始为0，超过maxRedirects则终止重定向）
-        int redirects = 0;
+    public String sendPost(String url, Map<String, String> params) {
+        try {
+            // 1. 解析 URL
+            Map<String, String> urlInfo = parseUrl(url);
+            String host = urlInfo.get("host");
+            int port = Integer.parseInt(urlInfo.get("port"));
+            String uri = urlInfo.get("uri");
 
-        // 循环处理请求+重定向：直到获取非重定向响应或达到最大重定向次数
-        while (true) {
-            // URL解析结果对象：存储解析后的协议、主机、端口、路径等信息
-            UrlInfo info;
-            try {
-                // 解析当前URL：将字符串URL转为结构化的UrlInfo对象
-                info = UrlParser.parse(current);
-            } catch (URISyntaxException e) {
-                // 捕获URL语法异常，包装为IO异常抛出（让调用者统一处理）
-                throw new IOException("Invalid URL: " + current, e);
-            }
+            // 2. 拼接 POST 参数（表单格式：name=test&pwd=123）
+            String postBody = buildPostParams(params);
 
-            // 构造请求路径：若解析后的path为空（如URL为http://localhost），则默认路径为"/"
-            String path = info.path == null || info.path.isEmpty() ? "/" : info.path;
+            // 3. 创建 Socket 连接
+            Socket socket = new Socket(host, port);
 
-            // 从缓存中获取当前URL对应的已缓存响应（用于构建条件请求头）
-            Response cached = cache.get(current);
-            // 字符串构建器：拼接GET请求的完整报文（请求行+请求头+空行）
-            StringBuilder req = new StringBuilder();
+            // 4. 构建 POST 请求头
+            StringBuilder request = new StringBuilder();
+            request.append("POST ").append(uri).append(" HTTP/1.1\r\n"); // 请求行
+            request.append("Host: ").append(host).append(":").append(port).append("\r\n");
+            request.append("Content-Type: application/x-www-form-urlencoded\r\n"); // 表单类型
+            request.append("Content-Length: ").append(postBody.getBytes().length).append("\r\n"); // 参数长度
+            request.append("Connection: close\r\n");
+            request.append("\r\n"); // 空行分隔请求头和请求体
+            request.append(postBody); // 请求体（参数），即客户需要修改或提交的内容（比如登录场景下的，账号密码）
 
-            // 1. 拼接请求行：GET方法 + 路径（含查询参数） + HTTP/1.1协议版本
-            req.append("GET ").append(path).append(" HTTP/1.1\r\n");
-            // 2. 拼接Host头：主机名 + 非默认端口（80/443）时补充端口号
-            req.append("Host: ").append(info.host);
-            // 若端口不是HTTP默认80（http）或443（https），则在Host头后追加端口
-            if (!(info.port == 80 || info.port == 443)) req.append(":" + info.port);
-            req.append("\r\n");
-            // 3. 拼接Connection头：设置为close（短连接，简化处理，不启用Keep-Alive）
-            req.append("Connection: close\r\n");
-            // 4. 拼接Accept头：表示客户端接受所有类型的响应数据（/*/*）
-            req.append("Accept: */*\r\n");
-            // 5. 拼接User-Agent头：标识客户端身份（自定义简易客户端版本）
-            req.append("User-Agent: SimpleHttpClient/1.0\r\n");
+            // 5. 发送请求
+            OutputStream outputStream = socket.getOutputStream();
+            outputStream.write(request.toString().getBytes());
+            outputStream.flush();
 
-            // 若存在缓存响应，添加条件请求头（减少重复数据传输）
-            if (cached != null) {
-                // 获取缓存响应的ETag头（资源唯一标识）
-                String etag = cached.getHeader("etag");
-                // 获取缓存响应的Last-Modified头（资源最后修改时间）
-                String lm = cached.getHeader("last-modified");
-                // 若有ETag，添加If-None-Match头：仅当服务器资源ETag与客户端不一致时返回完整响应
-                if (etag != null) {
-                    req.append("If-None-Match: ").append(etag).append("\r\n");
-                }
-                // 若有Last-Modified，添加If-Modified-Since头：仅当服务器资源更新时间晚于该时间时返回完整响应
-                if (lm != null) {
-                    req.append("If-Modified-Since: ").append(lm).append("\r\n");
-                }
-            }
+            // 6. 接收响应
+            String response = readResponse(socket.getInputStream());
 
-            // 6. 请求头结束标志：空行（\r\n），分隔请求头和请求体（GET请求无请求体）
-            req.append("\r\n");
+            // 7. 关闭连接
+            socket.close();
+            return response;
 
-            // 将拼接好的请求字符串转为UTF-8字节数组（网络传输需字节流）
-            byte[] reqBytes = req.toString().getBytes(StandardCharsets.UTF_8);
-
-            // 创建Socket池：指定目标主机、端口，池大小为1（单连接复用，简化池管理）
-            SocketPool pool = new SocketPool(info.host, info.port, 1);
-            // 创建BIO传输对象：通过Socket池获取Socket，实现请求发送和响应接收
-            BIOTransport transport = new BIOTransport(pool);
-            // 发送请求字节数组，接收服务器返回的原始响应字节（阻塞直到响应接收完成）
-            byte[] raw = transport.send(reqBytes);
-
-            // 解析原始响应字节：将字节流转为结构化的Response对象
-            Response resp = ResponseParser.parse(raw);
-
-            // 获取响应状态码（如200、301、302、304等）
-            int code = resp.getStatusCode();
-
-            // 处理重定向响应（301永久重定向、302临时重定向）
-            if ((code == 301 || code == 302) && redirects < maxRedirects) {
-                // 从响应头中获取重定向目标地址（Location头）
-                String loc = resp.getHeader("location");
-                // 若Location头为空，无法重定向，直接返回当前响应
-                if (loc == null || loc.isEmpty()) {
-                    return resp;
-                }
-
-                // 解析Location地址：处理绝对路径、根相对路径、相对路径三种情况
-                String next;
-                // 情况1：Location是绝对路径（以http://或https://开头）
-                if (loc.startsWith("http://") || loc.startsWith("https://")) {
-                    next = loc;
-                }
-                // 情况2：Location是根相对路径（以/开头，基于主机根目录）
-                else if (loc.startsWith("/")) {
-                    next = info.scheme + "://" + info.host
-                            + (info.port == 80 || info.port == 443 ? "" : ":" + info.port)
-                            + loc;
-                }
-                // 情况3：Location是相对路径（基于当前请求路径的目录）
-                else {
-                    // 获取当前URL的基础路径（去掉文件名，保留目录部分）
-                    String basePath = info.path;
-                    // 找到最后一个/的索引（分割目录和文件名）
-                    int idx = basePath.lastIndexOf('/');
-                    // 若存在/，截取到最后一个/（含/），作为基础目录；否则基础路径为/
-                    if (idx >= 0) basePath = basePath.substring(0, idx + 1);
-                    // 拼接完整的重定向地址
-                    next = info.scheme + "://" + info.host
-                            + (info.port == 80 || info.port == 443 ? "" : ":" + info.port)
-                            + basePath + loc;
-                }
-
-                // 重定向次数+1，更新当前请求URL为新地址，继续循环发送请求
-                redirects++;
-                current = next;
-                continue; // 跳过后续逻辑，直接进入下一次循环（请求新地址）
-            }
-
-            // 处理304 Not Modified（资源未修改）响应
-            if (code == 304) {
-                // 从缓存中获取当前URL的缓存响应
-                Response cachedResp = cache.get(current);
-                // 若存在缓存响应：合并304响应中可能更新的头部（如新ETag、Cache-Control等）到缓存
-                if (cachedResp != null) {
-                    for (Map.Entry<String, String> e : resp.getHeaders().entrySet()) {
-                        // 仅合并非空的键值对（避免覆盖为null）
-                        if (e.getKey() != null && e.getValue() != null) {
-                            cachedResp.setHeader(e.getKey(), e.getValue());
-                        }
-                    }
-                    // 返回更新后的缓存响应（避免重复下载相同资源）
-                    return cachedResp;
-                }
-                // 若不存在缓存（异常情况），直接返回304响应
-                return resp;
-            }
-
-            // 处理200 OK响应：将响应存入缓存（覆盖旧缓存，确保缓存最新）
-            // 即使是条件请求（之前发过If-None-Match/If-Modified-Since），也更新缓存
-            if (code == 200) {
-                cache.put(current, resp);
-            }
-
-            // 返回最终响应（非重定向、非304的响应，如200、404、500等）
-            return resp;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "请求失败：" + e.getMessage();
         }
+    }
+
+    /**
+     * 解析 URL，提取 host、port、uri
+     * 示例：http://localhost:8080/login?name=test → host=localhost, port=8080, uri=/login?name=test
+     */
+    private Map<String, String> parseUrl(String url) {
+        Map<String, String> result = new HashMap<>();
+        // 去掉协议头（http://）
+        String urlWithoutProtocol = url.replace("http://", "");
+        // 拆分主机部分和路径（按第一个 "/" 分割）
+        int firstSlashIndex = urlWithoutProtocol.indexOf("/");
+        String hostPortPart;
+        String uri;
+        if (firstSlashIndex == -1) {
+            // 没有路径，默认 uri 为 /
+            hostPortPart = urlWithoutProtocol;
+            uri = "/";
+        } else {
+            hostPortPart = urlWithoutProtocol.substring(0, firstSlashIndex);
+            uri = urlWithoutProtocol.substring(firstSlashIndex);
+        }
+        // 拆分主机和端口（默认端口 80）
+        int colonIndex = hostPortPart.indexOf(":");
+        String host;
+        int port;
+        if (colonIndex == -1) {
+            host = hostPortPart;
+            port = 80; // HTTP 默认端口
+        } else {
+            host = hostPortPart.substring(0, colonIndex);
+            port = Integer.parseInt(hostPortPart.substring(colonIndex + 1));
+        }
+        // 存入结果
+        result.put("host", host);
+        result.put("port", String.valueOf(port));
+        result.put("uri", uri);
+        return result;
+    }
+
+    /**
+     * 拼接 POST 参数为表单格式（name=test&pwd=123）
+     */
+    private String buildPostParams(Map<String, String> params) {
+        if (params == null || params.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        Set<Map.Entry<String, String>> entries = params.entrySet();
+        for (Map.Entry<String, String> entry : entries) {
+            sb.append(entry.getKey()).append("=").append(entry.getValue()).append("&");
+        }
+        // 去掉最后一个 "&"
+        if (sb.length() > 0) {
+            sb.deleteCharAt(sb.length() - 1);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 从输入流读取服务器响应，转成字符串
+     */
+    private String readResponse(InputStream inputStream) throws IOException {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+        StringBuilder response = new StringBuilder();
+        String line;
+        // 逐行读取响应（包括响应头和响应体）
+        while ((line = reader.readLine()) != null) {
+            response.append(line).append("\r\n"); // 保留换行符
+        }
+        return response.toString();
+    }
+
+    // 测试方法：运行后可验证功能
+    public static void main(String[] args) {
+        HttpClient client = new HttpClient();
+
+        // 测试 GET 请求（假设服务器在 localhost:8080 运行）
+        String getResponse = client.sendGet("http://localhost:8080/static/index.html");
+        System.out.println("GET 响应:\n" + getResponse);
+
+        // 测试 POST 请求（模拟登录）
+        Map<String, String> params = new HashMap<>();
+        params.put("username", "test");
+        params.put("password", "123456");
+        String postResponse = client.sendPost("http://localhost:8080/user/login", params);
+        System.out.println("POST 响应:\n" + postResponse);
     }
 }
