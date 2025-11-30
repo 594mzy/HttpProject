@@ -34,7 +34,12 @@ public class ResourceHandler {
             resp.setStatusCode(200);
             resp.setReasonPhrase("OK");
             resp.setHeader("Content-Type", mime);
+            //System.out.println("[ResourceHandler] file body length = " + body.length);
             resp.setHeader("Content-Length", String.valueOf(body.length));
+            if("HEAD".equals(req.getMethod())){
+                resp.setBody(new byte[0]);
+                return resp;
+            }
             resp.setBody(body);
             return resp;
         } catch (Exception e) {
