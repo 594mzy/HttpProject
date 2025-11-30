@@ -18,22 +18,36 @@ public class Router {
     public Router() {
         // 业务路由
         UserHandler userHandler = new UserHandler();
-        routeTable.put("POST /user/login",   userHandler::login);
-        routeTable.put("POST /user/register",userHandler::register);
+        routeTable.put("POST /user/login", userHandler::login);
+        routeTable.put("POST /user/register", userHandler::register);
     }
 
     /** 唯一暴露的方法：把请求扔进来，把响应拿出去 */
     public Response dispatch(Request req) {
-        String key = req.getMethod() + " " + req.getPath();
-        Function<Request, Response> handler = routeTable.get(key);
+        try {
+            String key = req.getMethod() + " " + req.getPath();
+            Function<Request, Response> handler = routeTable.get(key);
 
-        if (handler != null) return handler.apply(req);
+            if (handler != null)
+                return handler.apply(req);
 
-        // 没有业务路由就交给静态资源处理器
-        if (req.getMethod().equals("GET")) return resourceHandler.getStaticResource(req.getPath());
-
-        // 真的找不到
-        return new404();
+            // 没有业务路由就交给静态资源处理器
+            // Router.dispatch() 里替换原来的静态分支
+            if ("GET".equals(req.getMethod()) && req.getPath().startsWith("/static/")) {
+                System.out.println("Serving static resource: " + req.getPath());
+                return resourceHandler.getStaticResource(req.getPath().substring(7));// 去掉 /static
+            }
+            // 真的找不到
+            // 路径命中但方法不对
+            boolean hasPath = routeTable.keySet().stream()
+                    .anyMatch(k -> k.endsWith(" " + req.getPath()));
+            if (hasPath)
+                return new405();
+            return new404();
+        } catch (Exception e) {
+            e.printStackTrace(); // 看控制台
+            return new500();
+        }
     }
 
     private Response new404() {
@@ -43,5 +57,24 @@ public class Router {
         resp.setHeader("Content-Type", "text/plain; charset=utf-8");
         resp.setBody("404 Not Found".getBytes());
         return resp;
+    }
+
+    private Response new405() {
+        Response r = new Response();
+        r.setStatusCode(405);
+        r.setReasonPhrase("Method Not Allowed");
+        r.setHeader("Allow", "GET, POST");
+        r.setHeader("Content-Type", "text/plain");
+        r.setBody("405 Method Not Allowed".getBytes());
+        return r;
+    }
+
+    private Response new500() {
+        Response r = new Response();
+        r.setStatusCode(500);
+        r.setReasonPhrase("Internal Server Error");
+        r.setHeader("Content-Type", "text/plain");
+        r.setBody("500 Internal Server Error".getBytes());
+        return r;
     }
 }

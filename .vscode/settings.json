@@ -1,0 +1,7 @@
+{
+    "java.project.sourcePaths": [
+        "HttpProject\\src\\com\\resources",
+        "HttpProject\\src\\com\\http",
+    ],
+    "java.project.referencedLibraries": []
+}
