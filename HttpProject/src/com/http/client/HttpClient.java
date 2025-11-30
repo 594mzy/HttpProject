@@ -1,5 +1,7 @@
 package client;
 
+import common.SocketPool;
+
 import java.io.*;
 import java.net.Socket;
 import java.util.HashMap;
@@ -7,22 +9,27 @@ import java.util.Map;
 import java.util.Set;
 
 public class HttpClient {
-
+    // 维护一个Socket连接池映射（按host:port区分不同服务的连接池）
+    private final Map<String, SocketPool> socketPools = new HashMap<>();
+    // 连接池最大容量
+    private static final int MAX_POOL_SIZE = 10;
     /**
      * 发送 GET 请求
      * @param url 目标 URL（如 http://localhost:8080/login?name=test）
      * @return 服务器返回的完整响应（响应头 + 响应体）
      */
     public String sendGet(String url) {
+        Socket socket = null;
         try {
             // 1. 解析 URL，获取 host、port、uri
             Map<String, String> urlInfo = parseUrl(url);
             String host = urlInfo.get("host");//主机：localhost
             int port = Integer.parseInt(urlInfo.get("port"));//端口：8080
             String uri = urlInfo.get("uri");//路径+参数
-
+            String key = host + ":" + port;
             // 2. 创建 Socket 连接服务器
-            Socket socket = new Socket(host, port);
+            socketPools.putIfAbsent(key, new SocketPool(host, port, MAX_POOL_SIZE));
+            socket = socketPools.get(key).getConnection();
 
             // 3. 构建 GET 请求头（按 HTTP 规范，每行以 \r\n 结尾，最后加空行）
             StringBuilder request = new StringBuilder();
@@ -40,10 +47,18 @@ public class HttpClient {
             String response = readResponse(socket.getInputStream());
 
             // 6. 关闭连接
-            socket.close();
+            socketPools.get(key).releaseConnection(socket);
             return response;
 
         } catch (Exception e) {
+            // 发生异常时关闭socket，不再归还
+            if (socket != null && !socket.isClosed()) {
+                try {
+                    socket.close();
+                } catch (IOException ex) {
+                    ex.printStackTrace();
+                }
+            }
             e.printStackTrace();
             return "请求失败：" + e.getMessage();
         }
@@ -56,18 +71,20 @@ public class HttpClient {
      * @return 服务器返回的完整响应
      */
     public String sendPost(String url, Map<String, String> params) {
+        Socket socket = null;
         try {
             // 1. 解析 URL
             Map<String, String> urlInfo = parseUrl(url);
             String host = urlInfo.get("host");
             int port = Integer.parseInt(urlInfo.get("port"));
             String uri = urlInfo.get("uri");
-
+            String key = host + ":" + port;
             // 2. 拼接 POST 参数（表单格式：name=test&pwd=123）
             String postBody = buildPostParams(params);
 
             // 3. 创建 Socket 连接
-            Socket socket = new Socket(host, port);
+            socketPools.putIfAbsent(key, new SocketPool(host, port, MAX_POOL_SIZE));
+            socket = socketPools.get(key).getConnection();
 
             // 4. 构建 POST 请求头
             StringBuilder request = new StringBuilder();
@@ -88,15 +105,32 @@ public class HttpClient {
             String response = readResponse(socket.getInputStream());
 
             // 7. 关闭连接
-            socket.close();
+            socketPools.get(key).releaseConnection(socket);
             return response;
 
         } catch (Exception e) {
+            // 发生异常时关闭socket，不再归还
+            if (socket != null && !socket.isClosed()) {
+                try {
+                    socket.close();
+                } catch (IOException ex) {
+                    ex.printStackTrace();
+                }
+            }
             e.printStackTrace();
             return "请求失败：" + e.getMessage();
         }
     }
 
+    /**
+     * 关闭所有连接池
+     */
+    public void closeAllPools() {
+        for (SocketPool pool : socketPools.values()) {
+            pool.closePool();
+        }
+        socketPools.clear();
+    }
     /**
      * 解析 URL，提取 host、port、uri
      * 示例：http://localhost:8080/login?name=test → host=localhost, port=8080, uri=/login?name=test
@@ -182,5 +216,7 @@ public class HttpClient {
         params.put("password", "123456");
         String postResponse = client.sendPost("http://localhost:8080/user/login", params);
         System.out.println("POST 响应:\n" + postResponse);
+        // 程序结束时关闭所有连接池
+        client.closeAllPools();
     }
 }
