@@ -2,6 +2,7 @@ package server;
 
 import common.Response;
 import common.MimeUtil;
+import common.Request;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -14,7 +15,7 @@ public class ResourceHandler {
 
     private static final String STATIC_ROOT = "/static"; // 对应 resources/static
 
-    public Response getStaticResource(String path) {
+    public Response getStaticResource(String path, Request req) {
         Response resp = new Response();
         // 安全：禁止向上跳目录
         if (path.contains(".."))

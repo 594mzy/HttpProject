@@ -35,7 +35,16 @@ public class Router {
             // Router.dispatch() 里替换原来的静态分支
             if ("GET".equals(req.getMethod()) && req.getPath().startsWith("/static/")) {
                 System.out.println("Serving static resource: " + req.getPath());
-                return resourceHandler.getStaticResource(req.getPath().substring(7));// 去掉 /static
+                return resourceHandler.getStaticResource(req.getPath().substring(7), req);// 去掉 /static
+            }
+            // ----- 304 Not Modified -----
+            String ifModified = req.getHeader("if-modified-since");
+            if (ifModified != null && !ifModified.isEmpty()) {
+                // 演示：直接返回 304，正式项目要对比时间戳
+                Response r = new Response();
+                r.setStatusCode(304);
+                r.setReasonPhrase("Not Modified");
+                return r;
             }
             // 真的找不到
             // 路径命中但方法不对
