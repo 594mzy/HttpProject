@@ -19,9 +19,12 @@ public class ClientHandler implements Runnable {
 
     @Override
     public void run() {
+        
         try (InputStream in = socket.getInputStream(); OutputStream out = socket.getOutputStream()) {
             // 循环处理同一 socket 上的多次请求（支持 Keep-Alive）
+            socket.setSoTimeout(30_000); // 30 秒没读到完整请求就抛 SocketTimeoutException
             while (!socket.isClosed()) {
+                // System.out.println("[" + Thread.currentThread() + "] 等待读取请求…");
                 Request req;
                 try {
                     req = RequestParser.parse(in);
@@ -64,7 +67,11 @@ public class ClientHandler implements Runnable {
                 if (!keepAlive) break;
                 // 若 keep-alive，继续循环等待下一个请求在同一连接上到来
             }
-        } catch (IOException ignored) {
+        }catch(java.net.SocketTimeoutException e) {
+            // 读请求超时，直接关闭连接
+            System.out.println("[" + Thread.currentThread().getName() + "] 30s 内未收到完整请求，关闭连接");
+        }
+        catch (IOException ignored) {
             // 忽略流关闭异常
         } finally {
             try {

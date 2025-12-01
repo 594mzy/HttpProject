@@ -29,6 +29,7 @@ public class RequestParser {
 
     /**
      * 核心解析方法：从输入流解析HTTP请求（阻塞直到头部完整读取，再按需读取请求体）
+     * 
      * @param in 输入流（通常是Socket的输入流，承载客户端发送的HTTP请求数据）
      * @return 解析后的Request对象，包含请求方法、路径、版本、头信息、请求体
      * @throws IOException 当流读取失败、请求格式非法时抛出
@@ -45,19 +46,21 @@ public class RequestParser {
         // 2. 解析请求行和请求头：先将原始头部按\r\n分割成多行（每行是请求行或头字段）
         String[] lines = rawHeaders.split("\r\n");
         // 校验：如果分割后没有任何行，说明请求为空，抛出非法请求异常
-        if (lines.length == 0) throw new IOException("Invalid HTTP request: empty headers");
+        if (lines.length == 0)
+            throw new IOException("Invalid HTTP request: empty headers");
 
         // 提取第一行作为请求行（格式：Method Path Version，如GET /index.html HTTP/1.1）
         String requestLine = lines[0];
         // 按空格分割请求行，最多分割3部分（避免路径或版本中含空格的异常情况）
         String[] reqParts = requestLine.split(" ", 3);
         // 校验：请求行必须包含方法、路径、版本三部分，否则非法
-        if (reqParts.length < 3) throw new IOException("Invalid request line: " + requestLine);
+        if (reqParts.length < 3)
+            throw new IOException("Invalid request line: " + requestLine);
 
         // 3. 初始化Request对象，封装请求行数据
         Request req = new Request();
         req.setMethod(reqParts[0]); // 设置请求方法（如GET、POST）
-        req.setPath(reqParts[1]);   // 设置请求路径（如/、/api/json）
+        req.setPath(reqParts[1]); // 设置请求路径（如/、/api/json）
         req.setVersion(reqParts[2]);// 设置HTTP协议版本（如HTTP/1.1）
 
         // 4. 解析请求头字段：将原始头部字符串转为键值对Map
@@ -78,6 +81,11 @@ public class RequestParser {
         // 6. 读取请求体（根据请求头的传输编码类型处理）
         // 获取Transfer-Encoding头（转为小写，避免大小写敏感问题，HTTP头字段不区分大小写）
         String transferEncoding = headers.getOrDefault("transfer-encoding", "").toLowerCase();
+        // 没有正文的头字段，直接返回
+        if (!headers.containsKey("content-length") &&
+                !"chunked".equalsIgnoreCase(headers.getOrDefault("transfer-encoding", ""))) {
+            return req; // ← 读完头就结束，不再尝试读 body
+        }
         // 情况1：分块传输编码（chunked），按chunked规则读取
         if ("chunked".equals(transferEncoding)) {
             // 用字节数组输出流累积分块数据
@@ -113,6 +121,7 @@ public class RequestParser {
     /**
      * 读取HTTP请求头：从输入流读取数据，直到遇到\r\n\r\n（请求头结束标志）
      * 处理边界情况：可能会多读部分请求体字节，需一并返回供后续处理
+     * 
      * @param in 输入流（Socket输入流）
      * @return Map集合，包含两个键：
      *         - rawHeaders: 完整的原始请求头字符串（含请求行+所有头字段+末尾\r\n\r\n）
@@ -183,6 +192,7 @@ public class RequestParser {
 
     /**
      * 在字节数组中查找HTTP请求头结束标志：\r\n\r\n（4个连续字节）
+     * 
      * @param data 要查找的字节数组（已累积的头部数据）
      * @return 找到则返回\r\n\r\n的起始索引，未找到返回-1
      */
@@ -202,6 +212,7 @@ public class RequestParser {
     /**
      * 将原始请求头字符串解析为键值对Map（HTTP头字段）
      * 规则：HTTP头字段键不区分大小写，统一转为小写；值去除前后空格
+     * 
      * @param headerStr 原始请求头字符串（含请求行+所有头字段+末尾\r\n\r\n）
      * @return 解析后的头字段Map（key：小写头名，value：头值）
      */
@@ -209,7 +220,8 @@ public class RequestParser {
         // 初始化头字段Map
         Map<String, String> headers = new HashMap<>();
         // 若输入字符串为空，直接返回空Map
-        if (headerStr == null || headerStr.isEmpty()) return headers;
+        if (headerStr == null || headerStr.isEmpty())
+            return headers;
 
         // 按\r\n分割字符串，得到每行数据（第一行是请求行，后续是头字段）
         String[] lines = headerStr.split("\r\n");
@@ -218,7 +230,8 @@ public class RequestParser {
             // 去除当前行的前后空格（处理可能的空白行或行首尾空格）
             String line = lines[i].trim();
             // 若行为空，跳过（可能是头部末尾的空行）
-            if (line.isEmpty()) continue;
+            if (line.isEmpty())
+                continue;
 
             // 查找行中的冒号（HTTP头格式：Key: Value）
             int colonIndex = line.indexOf(':');
@@ -240,12 +253,14 @@ public class RequestParser {
     /**
      * 读取固定长度的HTTP请求体（对应Content-Length头指定的长度）
      * 确保读取的字节数严格等于指定长度，避免少读或多读
-     * @param in 输入流（可能是拼接后的SequenceInputStream）
-     * @param bodyBaos 字节数组输出流：累积读取的请求体数据
+     * 
+     * @param in            输入流（可能是拼接后的SequenceInputStream）
+     * @param bodyBaos      字节数组输出流：累积读取的请求体数据
      * @param contentLength 预期读取的字节长度（从Content-Length头解析）
      * @throws IOException 流读取失败、提前结束时抛出
      */
-    private static void readFixedLengthBody(InputStream in, ByteArrayOutputStream bodyBaos, int contentLength) throws IOException {
+    private static void readFixedLengthBody(InputStream in, ByteArrayOutputStream bodyBaos, int contentLength)
+            throws IOException {
         // 读取缓冲区：8192字节（较大缓冲区提升读取效率，适合文件上传等大请求体）
         byte[] buffer = new byte[8192];
         // 记录已读取的字节数
@@ -260,7 +275,8 @@ public class RequestParser {
             int r = in.read(buffer, 0, toRead);
 
             // 若返回-1，说明流提前结束，抛出异常（未读满预期长度）
-            if (r == -1) throw new IOException("Unexpected end of stream while reading fixed-length request body");
+            if (r == -1)
+                throw new IOException("Unexpected end of stream while reading fixed-length request body");
 
             // 将本次读取的字节写入累积输出流
             bodyBaos.write(buffer, 0, r);
@@ -271,8 +287,9 @@ public class RequestParser {
 
     /**
      * 读取分块编码（Chunked）的HTTP请求体（对应Transfer-Encoding: chunked）
-     * 遵循Chunked编码规则：分块长度（十六进制）\r\n 块数据\r\n ... 0\r\n  trailers\r\n\r\n
-     * @param in 输入流（可能是拼接后的SequenceInputStream）
+     * 遵循Chunked编码规则：分块长度（十六进制）\r\n 块数据\r\n ... 0\r\n trailers\r\n\r\n
+     * 
+     * @param in       输入流（可能是拼接后的SequenceInputStream）
      * @param bodyBaos 字节数组输出流：累积所有块数据，组成完整请求体
      * @throws IOException 流读取失败、编码格式非法时抛出
      */
@@ -282,7 +299,8 @@ public class RequestParser {
             // 读取当前分块的长度行（十六进制字符串，可能含分号后的扩展信息）
             String line = readLine(in);
             // 若读取到null，说明流提前结束，抛出异常
-            if (line == null) throw new IOException("Unexpected end of stream while reading chunk size");
+            if (line == null)
+                throw new IOException("Unexpected end of stream while reading chunk size");
 
             // 分割分块长度和扩展信息（分号后是扩展信息，可忽略）
             String chunkSizeHex = line.split(";", 2)[0].trim();
@@ -302,9 +320,11 @@ public class RequestParser {
                 while (true) {
                     String trailer = readLine(in);
                     // 流提前结束，抛出异常
-                    if (trailer == null) throw new IOException("Unexpected end of stream while reading chunked trailers");
+                    if (trailer == null)
+                        throw new IOException("Unexpected end of stream while reading chunked trailers");
                     // 遇到空行，说明尾部字段结束，跳出循环
-                    if (trailer.isEmpty()) break;
+                    if (trailer.isEmpty())
+                        break;
                 }
                 // 结束分块读取，跳出外层循环
                 break;
@@ -322,7 +342,8 @@ public class RequestParser {
                 // 读取数据到缓冲区
                 int r = in.read(buffer, 0, toRead);
                 // 流提前结束，抛出异常
-                if (r == -1) throw new IOException("Unexpected end of stream while reading chunk data");
+                if (r == -1)
+                    throw new IOException("Unexpected end of stream while reading chunk data");
 
                 // 将读取的数据写入累积输出流
                 bodyBaos.write(buffer, 0, r);
@@ -333,13 +354,15 @@ public class RequestParser {
             // 消费分块数据后的\r\n（分块数据末尾必须跟\r\n，否则格式非法）
             String crlf = readLine(in);
             // 若读取失败，说明格式非法，抛出异常
-            if (crlf == null) throw new IOException("Unexpected end of stream after chunk data");
+            if (crlf == null)
+                throw new IOException("Unexpected end of stream after chunk data");
         }
     }
 
     /**
      * 自定义按行读取输入流数据（兼容HTTP协议的\r\n换行符）
      * 功能：从输入流读取字符，直到遇到\r\n，返回去除\r\n后的字符串
+     * 
      * @param in 输入流
      * @return 读取到的一行字符串（不含\r\n），若流结束且无数据返回null
      * @throws IOException 流读取失败时抛出
@@ -375,7 +398,8 @@ public class RequestParser {
         }
 
         // 循环结束（流关闭）：若累积的字节数为0，返回null（无数据）
-        if (lineBaos.size() == 0) return null;
+        if (lineBaos.size() == 0)
+            return null;
         // 否则，返回累积的字节转为的字符串（可能是不完整的行，流提前结束）
         return lineBaos.toString(StandardCharsets.UTF_8.name());
     }
