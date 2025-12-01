@@ -14,6 +14,8 @@ public class RedirectHandler {
     // 依赖你写的 HttpClient
     private final HttpClient httpClient;
 
+    // 新增：301 重定向缓存（原 URL → 最终目标 URL）
+    private final Map<String, String> redirect301Cache = new HashMap<>();
     // 构造方法：初始化 HttpClient
     public RedirectHandler() {
         this.httpClient = new HttpClient();
@@ -25,6 +27,13 @@ public class RedirectHandler {
      * @return 最终的非重定向响应
      */
     public String sendGetWithRedirect(String url) {
+        // 先检查 301 缓存，若存在直接请求目标 URL
+        String cachedUrl = redirect301Cache.get(url);
+        if (cachedUrl != null) {
+            System.out.println("使用 301 缓存：" + url + " → " + cachedUrl);
+            return httpClient.sendGet(cachedUrl);
+        }
+        // 缓存未命中，走正常重定向流程
         return sendWithRedirect(url, null, "GET");
     }
 
@@ -35,6 +44,11 @@ public class RedirectHandler {
      * @return 最终的非重定向响应
      */
     public String sendPostWithRedirect(String url, Map<String, String> params) {
+        String cachedUrl = redirect301Cache.get(url);
+        if (cachedUrl != null) {
+            System.out.println("使用 301 缓存：" + url + " → " + cachedUrl);
+            return httpClient.sendPost(cachedUrl, params);
+        }
         return sendWithRedirect(url, params, "POST");
     }
 
@@ -50,7 +64,10 @@ public class RedirectHandler {
         int redirectCount = 0;
         String currentUrl = url;
         String response;
-
+        // 记录本次重定向链的起点（用于缓存 301 映射）
+        String originalUrl = currentUrl;
+        // 新增：标记是否遇到 301 重定向
+        boolean is301Redirect = false;
         while (redirectCount < MAX_REDIRECT_COUNT) {
             // 1. 发送当前 URL 的请求
             if ("GET".equalsIgnoreCase(method)) {
@@ -65,9 +82,17 @@ public class RedirectHandler {
             int statusCode = parseStatusCode(response);
             // 3. 如果不是重定向，直接返回响应
             if (statusCode != 301 && statusCode != 302) {
+                // 仅当遇到过 301 且最终响应成功时才缓存
+                if (is301Redirect && statusCode == 200) {
+                    redirect301Cache.put(originalUrl, currentUrl);
+                    System.out.println("缓存 301 重定向：" + originalUrl + " → " + currentUrl);
+                }
                 return response;
             }
-
+            // 标记是否是 301 重定向
+            if (statusCode == 301) {
+                is301Redirect = true;
+            }
             // 4. 如果是重定向，解析 Location 响应头（新 URL）
             String newUrl = parseLocationHeader(response);
             if (newUrl == null || newUrl.isEmpty()) {
@@ -156,7 +181,9 @@ public class RedirectHandler {
         RedirectHandler redirectHandler = new RedirectHandler();
 
         // 测试 GET 重定向（假设服务器配置 / → /static/index.html 302 重定向）
-        String getRedirectResponse = redirectHandler.sendGetWithRedirect("http://localhost:8080/");
+        String getRedirectResponse = redirectHandler.sendGetWithRedirect("http://localhost:8080/302");
+        System.out.println("GET 重定向最终响应:\n" + getRedirectResponse);
+         getRedirectResponse = redirectHandler.sendGetWithRedirect("http://localhost:8080/301");
         System.out.println("GET 重定向最终响应:\n" + getRedirectResponse);
 
         // 测试 POST 重定向（可选，POST 重定向较少见）
