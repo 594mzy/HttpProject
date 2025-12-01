@@ -13,7 +13,25 @@ import java.nio.file.Paths;
 
 public class ResourceHandler {
 
-    private static final String STATIC_ROOT = "/static"; // 对应 resources/static
+    private static final String STATIC_ROOT = "/static"; // classpath root
+    private final Path fsRoot; // optional filesystem root for static files
+
+    public ResourceHandler() {
+        this.fsRoot = null;
+    }
+
+    /**
+     * 构造器：允许指定文件系统上的静态资源根目录（便于开发时直接从 src 文件夹加载）
+     * 
+     * @param fsRootPath 静态资源根目录的文件系统路径（绝对或相对），例如 "src/com/resources/static"
+     */
+    public ResourceHandler(String fsRootPath) {
+        if (fsRootPath == null || fsRootPath.isEmpty()) {
+            this.fsRoot = null;
+        } else {
+            this.fsRoot = Paths.get(fsRootPath);
+        }
+    }
 
     public Response getStaticResource(String path, Request req) {
         Response resp = new Response();
@@ -21,7 +39,30 @@ public class ResourceHandler {
         if (path.contains(".."))
             return new404();
 
-        // 去 classpath 下读文件
+        // 1) 先尝试从文件系统读取（如果提供了 fsRoot）
+        if (fsRoot != null) {
+            try {
+                Path file = fsRoot.resolve(path.substring(1)); // path starts with '/'
+                if (Files.exists(file) && Files.isRegularFile(file)) {
+                    byte[] body = Files.readAllBytes(file);
+                    String mime = MimeUtil.fromFilename(file.getFileName().toString());
+                    resp.setStatusCode(200);
+                    resp.setReasonPhrase("OK");
+                    resp.setHeader("Content-Type", mime);
+                    resp.setHeader("Content-Length", String.valueOf(body.length));
+                    if ("HEAD".equals(req.getMethod())) {
+                        resp.setBody(new byte[0]);
+                        return resp;
+                    }
+                    resp.setBody(body);
+                    return resp;
+                }
+            } catch (IOException e) {
+                return new404();
+            }
+        }
+
+        // 2) 回退：从 classpath 读取资源（原有行为）
         URL url = getClass().getResource(STATIC_ROOT + path);
         if (url == null)
             return new404();
@@ -34,9 +75,8 @@ public class ResourceHandler {
             resp.setStatusCode(200);
             resp.setReasonPhrase("OK");
             resp.setHeader("Content-Type", mime);
-            //System.out.println("[ResourceHandler] file body length = " + body.length);
             resp.setHeader("Content-Length", String.valueOf(body.length));
-            if("HEAD".equals(req.getMethod())){
+            if ("HEAD".equals(req.getMethod())) {
                 resp.setBody(new byte[0]);
                 return resp;
             }

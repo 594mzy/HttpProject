@@ -13,13 +13,40 @@ public class Router {
 
     // 简易路由表： "GET /user/login" -> handler
     private final Map<String, Function<Request, Response>> routeTable = new HashMap<>();
-    private final ResourceHandler resourceHandler = new ResourceHandler();
+    private final ResourceHandler resourceHandler;
 
     public Router() {
+        // 尝试根据工作目录推断静态资源的文件系统路径（开发环境：src/com/resources/static）
+        String fsStatic = null;
+        try {
+            String wd = new java.io.File(".").getCanonicalPath();
+            java.nio.file.Path p1 = java.nio.file.Paths.get(wd, "src", "com", "resources", "static");
+            if (java.nio.file.Files.exists(p1)) {
+                fsStatic = p1.toString();
+            }
+        } catch (Exception ignored) {
+        }
+        if (fsStatic != null) {
+            resourceHandler = new ResourceHandler(fsStatic);
+        } else {
+            resourceHandler = new ResourceHandler();
+        }
         // 业务路由
         UserHandler userHandler = new UserHandler();
         routeTable.put("POST /user/login", userHandler::login);
         routeTable.put("POST /user/register", userHandler::register);
+        // Demo: 根路径重定向到静态首页（用于演示 301/302）
+        routeTable.put("GET /", req -> {
+            Response r = new Response();
+            r.setStatusCode(302);
+            r.setReasonPhrase("Found");
+            r.setHeader("Location", "/static/index.html");
+            return r;
+        });
+        // Demo: 触发服务器内部错误用于演示 500
+        routeTable.put("GET /err", req -> {
+            throw new RuntimeException("intentional test error");
+        });
     }
 
     /** 唯一暴露的方法：把请求扔进来，把响应拿出去 */
@@ -34,9 +61,9 @@ public class Router {
             // 没有业务路由就交给静态资源处理器
             // Router.dispatch() 里替换原来的静态分支
             if ("GET".equals(req.getMethod()) && req.getPath().startsWith("/static/")) {
-                //System.out.println("Serving static resource: " + req.getPath());
+                // System.out.println("Serving static resource: " + req.getPath());
                 return resourceHandler.getStaticResource(req.getPath().substring(7), req);// 去掉 /static
-            }else if("HEAD".equals(req.getMethod()) && req.getPath().startsWith("/static/")){
+            } else if ("HEAD".equals(req.getMethod()) && req.getPath().startsWith("/static/")) {
                 return resourceHandler.getStaticResource(req.getPath().substring(7), req);// 去掉 /static
             }
             // ----- 304 Not Modified -----
