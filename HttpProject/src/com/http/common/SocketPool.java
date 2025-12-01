@@ -36,25 +36,43 @@ public class SocketPool {
      * 获取长连接（优先复用池内连接，无可用则新建）
      */
     public Socket getConnection() throws IOException, InterruptedException {
-        // 尝试从队列中获取一个Socket，最多等待1秒。
-        // poll(time, unit)是一个阻塞方法。
-        // 如果在1秒内成功获取到Socket，就返回它。
-        // 如果1秒后队列仍然为空，poll方法会返回null。
-        Socket socket = connectionPool.poll(1, TimeUnit.SECONDS);
-        // 检查获取到的Socket是否有效，或者是否需要创建新的Socket。
-        // 如果socket为null（说明池中无连接）。
-        // 或者socket.isClosed()为true（连接已被关闭）。
-        // 或者!socket.isConnected()为true（连接已断开）。
-        if (socket == null || socket.isClosed() || !socket.isConnected()) {
-            // 新建连接
-            socket = new Socket(host, port);
-            // 设置Socket的Keep-Alive选项为true。
-            // 这是一个TCP层的选项，它会定期发送心跳包来检测连接是否有效。
-            // 配合HTTP的Keep-Alive头，可以实现应用层的长连接。
-            socket.setKeepAlive(true);
+        // 循环尝试获取池内可用连接；若池为空或无法得到可用连接则创建新的Socket并返回。
+        while (true) {
+            Socket socket = connectionPool.poll(1, TimeUnit.SECONDS);
+            if (socket == null) {
+                // 池中暂时无连接，创建新的连接并返回
+                Socket s = new Socket(host, port);
+                s.setKeepAlive(true);
+                s.setSoTimeout(15_000);
+                return s;
+            }
+
+            // 如果取到连接，先检查基本状态
+            boolean valid = true;
+            try {
+                if (socket.isClosed() || !socket.isConnected()) {
+                    valid = false;
+                } else if (!isAlive(socket)) {
+                    // 探活失败
+                    valid = false;
+                }
+            } catch (Exception e) {
+                valid = false;
+            }
+
+            if (!valid) {
+                // 关闭并继续循环尝试获取下一个连接
+                try {
+                    socket.close();
+                } catch (IOException ignored) {
+                }
+                continue;
+            }
+
+            // 连接可用，配置超时并返回
+            socket.setSoTimeout(15_000);
+            return socket;
         }
-        socket.setSoTimeout(15_000); // 增加读超时为 15 秒，避免过早超时
-        return socket;
     }
 
     // 新增：简单探活，失败就丢弃
