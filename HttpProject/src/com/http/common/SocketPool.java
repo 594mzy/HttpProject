@@ -73,19 +73,35 @@ public class SocketPool {
      * 归还连接到池（复用）
      */
     public void releaseConnection(Socket socket) {
-        // 检查Socket是否有效，并且连接池还没有满。
-        // socket != null
-        // !socket.isClosed()
-        // connectionPool.size() < maxPoolSize
-        // 只有当这三个条件都满足时，才将连接放回池中。
-        if (socket != null && !socket.isClosed() && connectionPool.size() < maxPoolSize) {
+        if (socket == null)
+            return;
+
+        // 如果已经关闭或未连接，直接丢弃并确保关闭
+        if (socket.isClosed() || !socket.isConnected()) {
             try {
-                connectionPool.put(socket);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                socket.close();
+            } catch (IOException ignored) {
+            }
+            return;
+        }
+
+        // 使用探活方法判断连接是否仍然可用
+        if (!isAlive(socket)) {
+            try {
+                socket.close();
+            } catch (IOException ignored) {
+            }
+            return;
+        }
+
+        // 尝试将连接放回池（非阻塞）。如果池满，则关闭该连接以避免泄漏。
+        boolean offered = connectionPool.offer(socket);
+        if (!offered) {
+            try {
+                socket.close();
+            } catch (IOException ignored) {
             }
         }
-        // 如果Socket无效或池已满，则不做任何操作，该Socket对象最终会被GC回收。
     }
 
     /**
