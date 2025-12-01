@@ -2,6 +2,8 @@ package client;
 
 import java.util.HashMap;
 import java.util.Map;
+import common.UrlParser; // 用于解析当前 URL，以便把相对 Location 转成绝对 URL
+import java.net.URISyntaxException;
 
 /**
  * 重定向处理器：自动处理 301/302 重定向响应
@@ -72,6 +74,25 @@ public class RedirectHandler {
                 return "重定向响应缺少 Location 头：\n" + response;
             }
 
+            // 处理相对 Location（如 "/static/index.html"） → 转为绝对 URL
+            if (newUrl.startsWith("/")) {
+                try {
+                    UrlParser.UrlInfo info = UrlParser.parse(currentUrl);
+                    String base = info.scheme + "://" + info.host + ":" + info.port;
+                    newUrl = base + newUrl;
+                } catch (URISyntaxException e) {
+                    return "无法解析当前 URL 以生成绝对重定向地址：" + currentUrl;
+                }
+            } else if (newUrl.startsWith("//")) {
+                // 协议相对 URL（//example.com/path）
+                try {
+                    UrlParser.UrlInfo info = UrlParser.parse(currentUrl);
+                    newUrl = info.scheme + ":" + newUrl;
+                } catch (URISyntaxException e) {
+                    return "无法解析当前 URL（协议相对重定向）：" + currentUrl;
+                }
+            }
+
             // 5. 更新当前 URL，准备下一次请求
             currentUrl = newUrl;
             redirectCount++;
@@ -139,10 +160,11 @@ public class RedirectHandler {
         System.out.println("GET 重定向最终响应:\n" + getRedirectResponse);
 
         // 测试 POST 重定向（可选，POST 重定向较少见）
-        Map<String, String> params = new HashMap<>();
-        params.put("username", "test");
-        params.put("password", "123456");
-        String postRedirectResponse = redirectHandler.sendPostWithRedirect("http://localhost:8080/old-login", params);
-        System.out.println("POST 重定向最终响应:\n" + postRedirectResponse);
+        // 这个我感觉没必要测试了
+//        Map<String, String> params = new HashMap<>();
+//        params.put("username", "test");
+//        params.put("password", "123456");
+//        String postRedirectResponse = redirectHandler.sendPostWithRedirect("http://localhost:8080/old-login", params);
+//        System.out.println("POST 重定向最终响应:\n" + postRedirectResponse);
     }
 }
