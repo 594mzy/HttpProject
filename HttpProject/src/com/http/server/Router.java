@@ -16,19 +16,39 @@ public class Router {
     private final ResourceHandler resourceHandler;
 
     public Router() {
-        // 尝试根据工作目录推断静态资源的文件系统路径（开发环境：src/com/resources/static）
+        // 尝试根据工作目录推断静态资源的文件系统路径（开发环境常见位置）
         String fsStatic = null;
         try {
             String wd = new java.io.File(".").getCanonicalPath();
-            java.nio.file.Path p1 = java.nio.file.Paths.get(wd, "src", "com", "resources", "static");
-            if (java.nio.file.Files.exists(p1)) {
-                fsStatic = p1.toString();
+            // 只查找 src/com/http/static（以及当前目录下的一级子目录用于嵌套项目结构）
+            java.nio.file.Path primary = java.nio.file.Paths.get(wd, "src", "com", "http", "static");
+            if (java.nio.file.Files.exists(primary)) {
+                fsStatic = primary.toString();
+                System.out.println("[Router] Using filesystem static root (com/http): " + fsStatic);
+            } else {
+                // 在当前目录的一级子目录中查找（例如外层 HttpProject 包含内层 HttpProject）
+                java.io.File wdFile = new java.io.File(wd);
+                java.io.File[] children = wdFile.listFiles(java.io.File::isDirectory);
+                if (children != null) {
+                    for (java.io.File child : children) {
+                        java.nio.file.Path cand = java.nio.file.Paths.get(child.getAbsolutePath(), "src", "com", "http",
+                                "static");
+                        if (java.nio.file.Files.exists(cand)) {
+                            fsStatic = cand.toString();
+                            System.out.println(
+                                    "[Router] Found filesystem static root in child folder (com/http): " + fsStatic);
+                            break;
+                        }
+                    }
+                }
             }
         } catch (Exception ignored) {
         }
+
         if (fsStatic != null) {
             resourceHandler = new ResourceHandler(fsStatic);
         } else {
+            System.out.println("[Router] No filesystem static root found; using classpath resources");
             resourceHandler = new ResourceHandler();
         }
         // 业务路由

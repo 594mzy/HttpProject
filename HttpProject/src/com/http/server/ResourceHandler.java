@@ -39,10 +39,16 @@ public class ResourceHandler {
         if (path.contains(".."))
             return new404();
 
+        // 兼容：允许传入以 '/' 开头或不以 '/' 开头的 path
+        String relPath = path;
+        if (relPath.startsWith("/"))
+            relPath = relPath.substring(1);
+
         // 1) 先尝试从文件系统读取（如果提供了 fsRoot）
         if (fsRoot != null) {
             try {
-                Path file = fsRoot.resolve(path.substring(1)); // path starts with '/'
+                Path file = fsRoot.resolve(relPath);
+                System.out.println("[ResourceHandler] Serving from fsRoot: " + file.toString());
                 if (Files.exists(file) && Files.isRegularFile(file)) {
                     byte[] body = Files.readAllBytes(file);
                     String mime = MimeUtil.fromFilename(file.getFileName().toString());
