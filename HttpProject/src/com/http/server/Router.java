@@ -56,7 +56,14 @@ public class Router {
         routeTable.put("POST /user/login", userHandler::login);
         routeTable.put("POST /user/register", userHandler::register);
         // Demo: 根路径重定向到静态首页（用于演示 301/302）
-        routeTable.put("GET /", req -> {
+        routeTable.put("GET /301", req -> {
+            Response r = new Response();
+            r.setStatusCode(301);
+            r.setReasonPhrase("Found");
+            r.setHeader("Location", "/static/index.html");
+            return r;
+        });
+        routeTable.put("GET /302", req -> {
             Response r = new Response();
             r.setStatusCode(302);
             r.setReasonPhrase("Found");
