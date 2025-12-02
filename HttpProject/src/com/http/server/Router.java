@@ -70,6 +70,13 @@ public class Router {
             r.setHeader("Location", "/static/index.html");
             return r;
         });
+        routeTable.put("GET /", req -> {
+            Response r = new Response();
+            r.setStatusCode(302);
+            r.setReasonPhrase("Found");
+            r.setHeader("Location", "/static/index.html");
+            return r;
+        });
         // Demo: 触发服务器内部错误用于演示 500
         routeTable.put("GET /err", req -> {
             throw new RuntimeException("intentional test error");
@@ -94,14 +101,8 @@ public class Router {
                 return resourceHandler.getStaticResource(req.getPath().substring(7), req);// 去掉 /static
             }
             // ----- 304 Not Modified -----
-            String ifModified = req.getHeader("if-modified-since");
-            if (ifModified != null && !ifModified.isEmpty()) {
-                // 演示：直接返回 304，正式项目要对比时间戳
-                Response r = new Response();
-                r.setStatusCode(304);
-                r.setReasonPhrase("Not Modified");
-                return r;
-            }
+            // 由 ResourceHandler 处理静态资源的 If-Modified-Since/Last-Modified 比较。
+            // 这里不要做通用的基于请求头的直接返回，以免干扰其他路由的正确判断。
             // 真的找不到
             // 路径命中但方法不对
             boolean hasPath = routeTable.keySet().stream()
