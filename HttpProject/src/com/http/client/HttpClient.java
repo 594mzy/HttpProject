@@ -2,6 +2,9 @@ package client;
 
 import common.BIOTransport;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -176,30 +179,113 @@ public class HttpClient {
         return sb.toString();
     }
 
-    // 测试方法：运行后可验证功能
+    // 交互式客户端：在命令行持续监听并响应命令
     public static void main(String[] args) {
         HttpClient client = new HttpClient();
+        System.out.println("HttpClient REPL - 输入 'help' 查看可用命令");
 
-        /* ---------- 1. 测试 Keep-Alive：连续发 3 次 GET ---------- */
-        for (int i = 0; i < 3; i++) {
-            long t0 = System.currentTimeMillis();
-            String resp = client.sendGet("http://localhost:8080/static/index.html");
-            long t1 = System.currentTimeMillis();
-            System.out.println("GET req #" + i + " 耗时 " + (t1 - t0) + " ms");
-            System.out.println("GET resp len=" + (resp == null ? 0 : resp.length()));
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(System.in))) {
+            String line;
+            while (true) {
+                System.out.print("> ");
+                line = reader.readLine();
+                if (line == null) {
+                    // stdin closed
+                    break;
+                }
+                line = line.trim();
+                if (line.isEmpty())
+                    continue;
+
+                String[] parts = line.split("\\s+", 2);
+                String cmd = parts[0].toLowerCase();
+                String arg = parts.length > 1 ? parts[1].trim() : "";
+
+                try {
+                    switch (cmd) {
+                        case "help":
+                            printHelp();
+                            break;
+                        case "quit":
+                        case "exit":
+                            System.out.println("Exiting, closing transports...");
+                            client.closeAllPools();
+                            return;
+                        case "get": {
+                            if (arg.isEmpty()) {
+                                System.out.println("Usage: get <url>");
+                                break;
+                            }
+                            long t0 = System.currentTimeMillis();
+                            String resp = client.sendGet(arg);
+                            long t1 = System.currentTimeMillis();
+                            System.out.println("GET 耗时: " + (t1 - t0) + " ms");
+                            System.out.println(resp);
+                            break;
+                        }
+                        case "post": {
+                            if (arg.isEmpty()) {
+                                System.out.println("Usage: post <url> [k1=v1&k2=v2]");
+                                break;
+                            }
+                            String url;
+                            String paramStr = "";
+                            if (arg.contains(" ")) {
+                                int idx = arg.indexOf(' ');
+                                url = arg.substring(0, idx).trim();
+                                paramStr = arg.substring(idx + 1).trim();
+                            } else {
+                                url = arg;
+                            }
+                            Map<String, String> params = new HashMap<>();
+                            if (!paramStr.isEmpty()) {
+                                String[] pairs = paramStr.split("&");
+                                for (String p : pairs) {
+                                    int eq = p.indexOf('=');
+                                    if (eq != -1) {
+                                        String k = p.substring(0, eq);
+                                        String v = p.substring(eq + 1);
+                                        params.put(k, v);
+                                    }
+                                }
+                            }
+                            long t0 = System.currentTimeMillis();
+                            String resp = client.sendPost(url, params);
+                            long t1 = System.currentTimeMillis();
+                            System.out.println("POST 耗时: " + (t1 - t0) + " ms");
+                            System.out.println(resp);
+                            break;
+                        }
+                        case "close":
+                            client.closeAllPools();
+                            System.out.println("已关闭所有连接池");
+                            break;
+                        case "list":
+                            System.out.println("Active transports: " + client.transports.keySet());
+                            break;
+                        default:
+                            System.out.println("未知命令: " + cmd + ". 输入 'help' 查看可用命令。");
+                    }
+                } catch (Exception e) {
+                    System.out.println("命令执行出错: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            client.closeAllPools();
         }
+    }
 
-        /* ---------- 2. 顺手测一次 POST（不改也行，可选） ---------- */
-        Map<String, String> params = new HashMap<>();
-        params.put("username", "test");
-        params.put("password", "123456");
-        long t2 = System.currentTimeMillis();
-        String postResp = client.sendPost("http://localhost:8080/user/register", params);
-        long t3 = System.currentTimeMillis();
-        System.out.println("POST req  耗时 " + (t3 - t2) + " ms");
-        System.out.println("POST resp len=" + (postResp == null ? 0 : postResp.length()));
-
-        /* ---------- 3. 程序结束前统一释放连接池 ---------- */
-        client.closeAllPools();
+    private static void printHelp() {
+        System.out.println("可用命令:");
+        System.out.println("  help                 显示帮助");
+        System.out.println("  get <url>            发送 GET 请求，例如: get http://localhost:8080/static/index.html");
+        System.out.println(
+                "  post <url> [k=v&...] 发送 POST 请求，参数可选，例如: post http://localhost:8080/user/register username=alice&password=123");
+        System.out.println("  list                 列出活动 transport key (host:port)");
+        System.out.println("  close                关闭所有连接池");
+        System.out.println("  quit|exit            退出客户端");
     }
 }
