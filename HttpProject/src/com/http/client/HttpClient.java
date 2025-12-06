@@ -5,6 +5,7 @@ import common.BIOTransport;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -22,41 +23,64 @@ public class HttpClient {
      * @return 服务器返回的完整响应（响应头 + 响应体）
      */
     public String sendGet(String url) {
-        BIOTransport transport = null;
-        String key = null;
-        try {
-            // 1. 解析 URL，获取 host、port、uri
-            Map<String, String> urlInfo = parseUrl(url);
-            String host = urlInfo.get("host");// 主机：localhost
-            int port = Integer.parseInt(urlInfo.get("port"));// 端口：8080
-            String uri = urlInfo.get("uri");// 路径+参数
-            key = host + ":" + port;
-            // 2. 创建或获取 BIOTransport（内部维护 SocketPool）
-            transports.putIfAbsent(key, new BIOTransport(host, port, MAX_POOL_SIZE));
-            transport = transports.get(key);
-            // 3. 构建 GET 请求头（按 HTTP 规范，每行以 \r\n 结尾，最后加空行）
-            StringBuilder request = new StringBuilder();
-            request.append("GET ").append(uri).append(" HTTP/1.1\r\n"); // 请求行
-            request.append("Host: ").append(host).append(":").append(port).append("\r\n"); // Host 头
-            request.append("Connection: keep-alive\r\n"); // 告诉服务器处理完关闭连接
-            request.append("\r\n"); // 空行表示请求头结束
-            // 4-6. 使用 BIOTransport 发送并读取完整响应（内部在同一 socket 上完成）
-            String response = transport.sendRequest(request.toString().getBytes());
-            return response;
+        // 支持最多跟随 N 次 301/302 重定向
+        int maxRedirects = 5;
+        String currentUrl = url;
+        for (int attempt = 0; attempt <= maxRedirects; attempt++) {
+            BIOTransport transport = null;
+            String key = null;
+            try {
+                // 1. 解析 URL，获取 host、port、uri
+                Map<String, String> urlInfo = parseUrl(currentUrl);
+                String host = urlInfo.get("host");
+                int port = Integer.parseInt(urlInfo.get("port"));
+                String uri = urlInfo.get("uri");
+                key = host + ":" + port;
+                // 2. 创建或获取 BIOTransport（内部维护 SocketPool）
+                transports.putIfAbsent(key, new BIOTransport(host, port, MAX_POOL_SIZE));
+                transport = transports.get(key);
+                // 3. 构建 GET 请求头（按 HTTP 规范，每行以 \r\n 结尾，最后加空行）
+                StringBuilder request = new StringBuilder();
+                request.append("GET ").append(uri).append(" HTTP/1.1\r\n"); // 请求行
+                request.append("Host: ").append(host).append(":").append(port).append("\r\n"); // Host 头
+                request.append("Connection: keep-alive\r\n");
+                request.append("\r\n"); // 空行表示请求头结束
+                // 4-6. 使用 BIOTransport 发送并读取完整响应（内部在同一 socket 上完成）
+                String response = transport.sendRequest(request.toString().getBytes());
 
-        } catch (Exception e) {
-            // 如果 transport 可用，可考虑关闭 transport 对应的连接池以清理异常状态
-            if (transport != null) {
-                try {
-                    transport.close();
-                } catch (Exception ignored) {
+                // 解析响应并检查是否为 301/302
+                byte[] respBytes = response.getBytes(StandardCharsets.UTF_8);
+                common.Response parsed = ResponseParser.parse(respBytes);
+                if (parsed != null && parsed.isRedirect()) {
+                    String loc = parsed.getHeader("location");
+                    if (loc != null && !loc.isEmpty()) {
+                        // 解析 Location（支持相对和绝对 URL）并继续循环跟随
+                        currentUrl = resolveLocation(currentUrl, loc);
+                        if (attempt == maxRedirects) {
+                            return response; // 达到上限，返回最后响应
+                        }
+                        continue;
+                    }
                 }
-                if (key != null)
-                    transports.remove(key);
+
+                // 非重定向或无 Location，直接返回响应字符串
+                return response;
+
+            } catch (Exception e) {
+                // 如果 transport 可用，可考虑关闭 transport 对应的连接池以清理异常状态
+                if (transport != null) {
+                    try {
+                        transport.close();
+                    } catch (Exception ignored) {
+                    }
+                    if (key != null)
+                        transports.remove(key);
+                }
+                e.printStackTrace();
+                return "请求失败：" + e.getMessage();
             }
-            e.printStackTrace();
-            return "请求失败：" + e.getMessage();
         }
+        return "请求失败：重定向过多";
     }
 
     /**
@@ -67,6 +91,7 @@ public class HttpClient {
      * @return 服务器返回的完整响应
      */
     public String sendPost(String url, Map<String, String> params) {
+        // 发送初次 POST；若返回 301/302 且包含 Location，则转换为 GET 并跟随
         BIOTransport transport = null;
         String key = null;
         try {
@@ -91,12 +116,23 @@ public class HttpClient {
             request.append("Content-Length: ").append(postBody.getBytes().length).append("\r\n"); // 参数长度
             request.append("Connection: keep-alive\r\n");
             request.append("\r\n"); // 空行分隔请求头和请求体
-            request.append(postBody); // 请求体（参数），即客户需要修改或提交的内容（比如登录场景下的，账号密码）
+            request.append(postBody);
 
             // 使用 BIOTransport 在同一 socket 上发送并读取完整响应
             String response = transport.sendRequest(request.toString().getBytes());
-            return response;
 
+            // 解析响应并判断是否需要跟随 301/302
+            byte[] respBytes = response.getBytes(StandardCharsets.UTF_8);
+            common.Response parsed = ResponseParser.parse(respBytes);
+            if (parsed != null && parsed.isRedirect()) {
+                String loc = parsed.getHeader("location");
+                if (loc != null && !loc.isEmpty()) {
+                    String newUrl = resolveLocation(url, loc);
+                    // 按浏览器常见行为：POST 在遇到 301/302 时，后续使用 GET 请求访问 Location
+                    return sendGet(newUrl);
+                }
+            }
+            return response;
         } catch (Exception e) {
             if (transport != null) {
                 try {
@@ -177,6 +213,36 @@ public class HttpClient {
             sb.deleteCharAt(sb.length() - 1);
         }
         return sb.toString();
+    }
+
+    /**
+     * 解析并合成重定向 Location 为绝对 URL
+     * 支持绝对 URL、以 '/' 开头的绝对路径，以及相对路径
+     */
+    private String resolveLocation(String baseUrl, String location) {
+        if (location.startsWith("http://") || location.startsWith("https://")) {
+            return location;
+        }
+        // 解析 base
+        Map<String, String> base = parseUrl(baseUrl);
+        String host = base.get("host");
+        String port = base.get("port");
+        String baseUri = base.get("uri");
+
+        if (location.startsWith("/")) {
+            return "http://" + host + ":" + port + location;
+        } else {
+            // 相对路径：拼接到 baseUri 的目录
+            String dir = baseUri;
+            int idx = dir.lastIndexOf('/');
+            if (idx >= 0) {
+                dir = dir.substring(0, idx + 1);
+            } else {
+                dir = "/";
+            }
+            String newUri = dir + location;
+            return "http://" + host + ":" + port + newUri;
+        }
     }
 
     // 交互式客户端：在命令行持续监听并响应命令
