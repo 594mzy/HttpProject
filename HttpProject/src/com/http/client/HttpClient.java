@@ -114,21 +114,19 @@ public class HttpClient {
                 // 其他状态直接返回原始响应
                 return response;
 
-            } catch (Exception e) {
-                // 如果 transport 可用，可考虑关闭 transport 对应的连接池以清理异常状态
-                if (transport != null) {
-                    try {
-                        transport.close();
-                    } catch (Exception ignored) {
-                    }
-                    if (key != null)
-                        transports.remove(key);
+        } catch (Exception e) {
+            // 如果 transport 可用，可考虑关闭 transport 对应的连接池以清理异常状态
+            if (transport != null) {
+                try {
+                    transport.close();
+                } catch (Exception ignored) {
                 }
-                e.printStackTrace();
-                return "请求失败：" + e.getMessage();
+                if (key != null)
+                    transports.remove(key);
             }
+            e.printStackTrace();
+            return "请求失败：" + e.getMessage();
         }
-        return "请求失败：重定向过多";
     }
 
     /**
@@ -139,7 +137,6 @@ public class HttpClient {
      * @return 服务器返回的完整响应
      */
     public String sendPost(String url, Map<String, String> params) {
-        // 发送初次 POST；若返回 301/302 且包含 Location，则转换为 GET 并跟随
         BIOTransport transport = null;
         String key = null;
         try {
@@ -164,23 +161,12 @@ public class HttpClient {
             request.append("Content-Length: ").append(postBody.getBytes().length).append("\r\n"); // 参数长度
             request.append("Connection: keep-alive\r\n");
             request.append("\r\n"); // 空行分隔请求头和请求体
-            request.append(postBody);
+            request.append(postBody); // 请求体（参数），即客户需要修改或提交的内容（比如登录场景下的，账号密码）
 
             // 使用 BIOTransport 在同一 socket 上发送并读取完整响应
             String response = transport.sendRequest(request.toString().getBytes());
-
-            // 解析响应并判断是否需要跟随 301/302
-            byte[] respBytes = response.getBytes(StandardCharsets.UTF_8);
-            common.Response parsed = ResponseParser.parse(respBytes);
-            if (parsed != null && parsed.isRedirect()) {
-                String loc = parsed.getHeader("location");
-                if (loc != null && !loc.isEmpty()) {
-                    String newUrl = resolveLocation(url, loc);
-                    // 按浏览器常见行为：POST 在遇到 301/302 时，后续使用 GET 请求访问 Location
-                    return sendGet(newUrl);
-                }
-            }
             return response;
+
         } catch (Exception e) {
             if (transport != null) {
                 try {

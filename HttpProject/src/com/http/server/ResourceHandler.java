@@ -16,8 +16,6 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 
 public class ResourceHandler {
 
@@ -69,41 +67,19 @@ public class ResourceHandler {
                     // 如果请求包含 If-Modified-Since，尝试解析并比较
                     String ifMod = req.getHeader("if-modified-since");
                     if (ifMod != null && !ifMod.isEmpty()) {
-                        // 清洗常见包裹字符（例如一些客户端/工具可能会把时间包在 <> 或 "" 中）
-                        ifMod = ifMod.trim();
-                        if ((ifMod.startsWith("<") && ifMod.endsWith(">"))
-                                || (ifMod.startsWith("\"") && ifMod.endsWith("\""))) {
-                            ifMod = ifMod.substring(1, ifMod.length() - 1).trim();
-                        }
-                        // 尝试宽松解析 If-Modified-Since：优先 RFC1123，其次使用 SimpleDateFormat 作为回退
-                        Instant clientInstant = null;
                         try {
                             ZonedDateTime z = ZonedDateTime.parse(ifMod, rfc1123);
-                            clientInstant = z.toInstant();
-                        } catch (Exception ex1) {
-                            try {
-                                SimpleDateFormat sdf = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz",
-                                        Locale.ENGLISH);
-                                sdf.setTimeZone(java.util.TimeZone.getTimeZone("GMT"));
-                                Date d = sdf.parse(ifMod);
-                                if (d != null)
-                                    clientInstant = d.toInstant();
-                            } catch (Exception ex2) {
-                                // 解析失败，忽略并继续正常返回文件
-                            }
-                        }
-
-                        if (clientInstant != null) {
-                            long clientSec = clientInstant.getEpochSecond();
-                            long fileSec = lastModifiedInstant.getEpochSecond();
-                            // 允许 1 秒的容差以应对文件系统时间精度差异
-                            if (clientSec >= fileSec - 1) {
+                            Instant i = z.toInstant();
+                            // 比较到秒级以避免毫秒差异导致误判
+                            if (i.getEpochSecond() >= lastModifiedInstant.getEpochSecond()) {
                                 Response notMod = new Response();
                                 notMod.setStatusCode(304);
                                 notMod.setReasonPhrase("Not Modified");
                                 notMod.setHeader("Last-Modified", lastModHeader);
                                 return notMod;
                             }
+                        } catch (Exception ignored) {
+                            // 解析失败则继续正常返回文件
                         }
                     }
 
@@ -139,42 +115,16 @@ public class ResourceHandler {
                         .format(ZonedDateTime.ofInstant(Instant.ofEpochMilli(last), ZoneId.of("GMT")));
                 String ifMod = req.getHeader("if-modified-since");
                 if (ifMod != null && !ifMod.isEmpty()) {
-                    String rawIfMod = ifMod;
-                    // 清洗常见包裹字符（例如一些客户端/工具可能会把时间包在 <> 或 "" 中）
-                    ifMod = ifMod.trim();
-                    if ((ifMod.startsWith("<") && ifMod.endsWith(">"))
-                            || (ifMod.startsWith("\"") && ifMod.endsWith("\""))) {
-                        ifMod = ifMod.substring(1, ifMod.length() - 1).trim();
-                    }
-                    System.out.println(
-                            "[ResourceHandler] If-Modified-Since raw: '" + rawIfMod + "' sanitized: '" + ifMod + "'");
-                    // 尝试宽松解析 If-Modified-Since
-                    Instant clientInstant = null;
                     try {
                         ZonedDateTime z = ZonedDateTime.parse(ifMod, rfc1123);
-                        clientInstant = z.toInstant();
-                    } catch (Exception ex1) {
-                        try {
-                            SimpleDateFormat sdf = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz",
-                                    Locale.ENGLISH);
-                            sdf.setTimeZone(java.util.TimeZone.getTimeZone("GMT"));
-                            Date d = sdf.parse(ifMod);
-                            if (d != null)
-                                clientInstant = d.toInstant();
-                        } catch (Exception ex2) {
-                        }
-                    }
-
-                    if (clientInstant != null) {
-                        long clientSec = clientInstant.getEpochSecond();
-                        long lastSec = Instant.ofEpochMilli(last).getEpochSecond();
-                        if (clientSec >= lastSec - 1) {
+                        if (z.toInstant().getEpochSecond() >= Instant.ofEpochMilli(last).getEpochSecond()) {
                             Response notMod = new Response();
                             notMod.setStatusCode(304);
                             notMod.setReasonPhrase("Not Modified");
                             notMod.setHeader("Last-Modified", lastModHeader);
                             return notMod;
                         }
+                    } catch (Exception ignored) {
                     }
                 }
                 try (InputStream in = conn.getInputStream()) {
