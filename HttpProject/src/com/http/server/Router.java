@@ -103,7 +103,6 @@ public class Router {
             // ----- 304 Not Modified -----
             // 由 ResourceHandler 处理静态资源的 If-Modified-Since/Last-Modified 比较。
             // 这里不要做通用的基于请求头的直接返回，以免干扰其他路由的正确判断。
-            // 真的找不到
             // 路径命中但方法不对
             boolean hasPath = routeTable.keySet().stream()
                     .anyMatch(k -> k.endsWith(" " + req.getPath()));

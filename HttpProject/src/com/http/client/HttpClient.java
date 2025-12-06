@@ -1,7 +1,6 @@
 package client;
 
 import common.BIOTransport;
-
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -13,8 +12,26 @@ import java.util.Set;
 public class HttpClient {
     // 维护一个 BIOTransport 映射（按 host:port 区分不同服务的 transport 池）
     private final Map<String, BIOTransport> transports = new HashMap<>();
+    // 简单的内存缓存：按 URL 存储响应体与头（用于处理 304 -> 使用缓存）
+    private final Map<String, CacheEntry> cache = new HashMap<>();
     // 连接池最大容量
     private static final int MAX_POOL_SIZE = 10;
+    // 上一次请求是否命中本地缓存（供 REPL 展示）
+    private boolean lastCacheHit = false;
+
+    public boolean wasLastRequestCacheHit() {
+        return lastCacheHit;
+    }
+
+    private static class CacheEntry {
+        byte[] body;
+        Map<String, String> headers;
+
+        CacheEntry(byte[] body, Map<String, String> headers) {
+            this.body = body == null ? new byte[0] : body;
+            this.headers = headers == null ? new HashMap<>() : new HashMap<>(headers);
+        }
+    }
 
     /**
      * 发送 GET 请求
@@ -43,27 +60,58 @@ public class HttpClient {
                 StringBuilder request = new StringBuilder();
                 request.append("GET ").append(uri).append(" HTTP/1.1\r\n"); // 请求行
                 request.append("Host: ").append(host).append(":").append(port).append("\r\n"); // Host 头
+
+                // 如果本地有缓存且包含 Last-Modified，自动发送 If-Modified-Since 进行验证
+                CacheEntry cached = cache.get(currentUrl);
+                if (cached != null) {
+                    String lm = cached.headers.get("last-modified");
+                    if (lm != null && !lm.isEmpty()) {
+                        request.append("If-Modified-Since: ").append(lm).append("\r\n");
+                    }
+                }
+
                 request.append("Connection: keep-alive\r\n");
                 request.append("\r\n"); // 空行表示请求头结束
                 // 4-6. 使用 BIOTransport 发送并读取完整响应（内部在同一 socket 上完成）
                 String response = transport.sendRequest(request.toString().getBytes());
 
-                // 解析响应并检查是否为 301/302
+                // 解析响应
                 byte[] respBytes = response.getBytes(StandardCharsets.UTF_8);
                 common.Response parsed = ResponseParser.parse(respBytes);
-                if (parsed != null && parsed.isRedirect()) {
+                int status = parsed == null ? 0 : parsed.getStatusCode();
+
+                // 处理 301/302 重定向
+                if (status == 301 || status == 302) {
                     String loc = parsed.getHeader("location");
                     if (loc != null && !loc.isEmpty()) {
-                        // 解析 Location（支持相对和绝对 URL）并继续循环跟随
                         currentUrl = resolveLocation(currentUrl, loc);
                         if (attempt == maxRedirects) {
                             return response; // 达到上限，返回最后响应
                         }
-                        continue;
+                        continue; // 跟随重定向
                     }
                 }
 
-                // 非重定向或无 Location，直接返回响应字符串
+                // 处理 200：缓存结果并返回
+                if (status == 200) {
+                    cache.put(currentUrl, new CacheEntry(parsed.getBody(), parsed.getHeaders()));
+                    lastCacheHit = false;
+                    return response;
+                }
+
+                // 处理 304：尝试用缓存响应代替（若存在）
+                if (status == 304) {
+                    CacheEntry ce = cache.get(currentUrl);
+                    if (ce != null) {
+                        lastCacheHit = true;
+                        return buildResponseFromCache(ce);
+                    }
+                    lastCacheHit = false;
+                    // 无缓存则返回原始 304 响应
+                    return response;
+                }
+
+                // 其他状态直接返回原始响应
                 return response;
 
             } catch (Exception e) {
@@ -245,6 +293,26 @@ public class HttpClient {
         }
     }
 
+    private String buildResponseFromCache(CacheEntry ce) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("HTTP/1.1 200 OK\r\n");
+        // Ensure Content-Length is accurate
+        Map<String, String> headers = new HashMap<>(ce.headers);
+        headers.put("content-length", String.valueOf(ce.body.length));
+        // Append headers
+        for (Map.Entry<String, String> e : headers.entrySet()) {
+            sb.append(e.getKey()).append(": ").append(e.getValue()).append("\r\n");
+        }
+        sb.append("\r\n");
+        try {
+            sb.append(new String(ce.body, StandardCharsets.UTF_8));
+        } catch (Exception ex) {
+            // fallback: ignore encoding issues
+            sb.append("(binary content omitted)");
+        }
+        return sb.toString();
+    }
+
     // 交互式客户端：在命令行持续监听并响应命令
     public static void main(String[] args) {
         HttpClient client = new HttpClient();
@@ -287,6 +355,50 @@ public class HttpClient {
                             long t1 = System.currentTimeMillis();
                             System.out.println("GET 耗时: " + (t1 - t0) + " ms");
                             System.out.println(resp);
+                            System.out.println("缓存命中: " + client.wasLastRequestCacheHit());
+                            break;
+                        }
+                        case "ifmod": {
+                            // 用法: ifmod <url> <If-Modified-Since-value>
+                            if (arg.isEmpty() || !arg.contains(" ")) {
+                                System.out.println("Usage: ifmod <url> <If-Modified-Since-value>");
+                                break;
+                            }
+                            int idx = arg.indexOf(' ');
+                            String url = arg.substring(0, idx).trim();
+                            String dateValue = arg.substring(idx + 1).trim();
+
+                            Map<String, String> urlInfo = client.parseUrl(url);
+                            String host = urlInfo.get("host");
+                            int port = Integer.parseInt(urlInfo.get("port"));
+                            String uri = urlInfo.get("uri");
+                            StringBuilder req = new StringBuilder();
+                            req.append("GET ").append(uri).append(" HTTP/1.1\r\n");
+                            req.append("Host: ").append(host).append(":").append(port).append("\r\n");
+                            req.append("If-Modified-Since: ").append(dateValue).append("\r\n");
+                            req.append("Connection: keep-alive\r\n");
+                            req.append("\r\n");
+
+                            BIOTransport t = null;
+                            String key = host + ":" + port;
+                            try {
+                                client.transports.putIfAbsent(key, new BIOTransport(host, port, MAX_POOL_SIZE));
+                                t = client.transports.get(key);
+                                String res = t.sendRequest(req.toString().getBytes());
+                                // 简单打印响应头的状态行和 Location/Last-Modified
+                                byte[] respBytes = res.getBytes(StandardCharsets.UTF_8);
+                                common.Response parsed = ResponseParser.parse(respBytes);
+                                System.out.println("--- Response Status: " + parsed.getStatusCode() + " "
+                                        + parsed.getReasonPhrase());
+                                parsed.getHeaders().forEach((k, v) -> System.out.println(k + ": " + v));
+                                System.out.println();
+                                System.out.println(parsed.bodyAsString());
+                            } catch (Exception e) {
+                                System.out.println("ifmod 请求失败: " + e.getMessage());
+                                if (t != null)
+                                    t.close();
+                                client.transports.remove(key);
+                            }
                             break;
                         }
                         case "post": {
@@ -347,6 +459,7 @@ public class HttpClient {
     private static void printHelp() {
         System.out.println("可用命令:");
         System.out.println("  help                 显示帮助");
+        System.out.println("  ifmod                发送带 If-Modified-Since 头的 GET 请求，格式: ifmod <url> <date>");
         System.out.println("  get <url>            发送 GET 请求，例如: get http://localhost:8080/static/index.html");
         System.out.println(
                 "  post <url> [k=v&...] 发送 POST 请求，参数可选，例如: post http://localhost:8080/user/register username=alice&password=123");
