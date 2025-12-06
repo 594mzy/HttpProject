@@ -70,6 +70,13 @@ public class Router {
             r.setHeader("Location", "/static/index.html");
             return r;
         });
+        routeTable.put("GET /", req -> {
+            Response r = new Response();
+            r.setStatusCode(302);
+            r.setReasonPhrase("Found");
+            r.setHeader("Location", "/static/index.html");
+            return r;
+        });
         // Demo: 触发服务器内部错误用于演示 500
         routeTable.put("GET /err", req -> {
             throw new RuntimeException("intentional test error");
@@ -85,23 +92,25 @@ public class Router {
             if (handler != null)
                 return handler.apply(req);
 
-            // 没有业务路由就交给静态资源处理器
-            // Router.dispatch() 里替换原来的静态分支
-            if ("GET".equals(req.getMethod()) && req.getPath().startsWith("/static/")) {
-                // System.out.println("Serving static resource: " + req.getPath());
-                return resourceHandler.getStaticResource(req.getPath().substring(7), req);// 去掉 /static
-            } else if ("HEAD".equals(req.getMethod()) && req.getPath().startsWith("/static/")) {
-                return resourceHandler.getStaticResource(req.getPath().substring(7), req);// 去掉 /static
+            // 处理静态资源：统一先判断路径是否以 /static/ 开头
+            if (req.getPath().startsWith("/static/")) {
+                // GET 或 HEAD 正常交给 ResourceHandler 处理
+                if ("GET".equals(req.getMethod()) || "HEAD".equals(req.getMethod())) {
+                    return resourceHandler.getStaticResource(req.getPath().substring(7), req); // 去掉 /static
+                } else {
+                    // 对于其他方法（如 POST），先探测资源是否存在：若不存在返回 ResourceHandler 的 404，存在则返回 405
+                    Response probe = resourceHandler.getStaticResource(req.getPath().substring(7), req);
+                    if (probe.getStatusCode() == 404) {
+                        return probe;
+                    } else {
+                        return new405();
+                    }
+                }
             }
+
             // ----- 304 Not Modified -----
-            String ifModified = req.getHeader("if-modified-since");
-            if (ifModified != null && !ifModified.isEmpty()) {
-                // 演示：直接返回 304，正式项目要对比时间戳
-                Response r = new Response();
-                r.setStatusCode(304);
-                r.setReasonPhrase("Not Modified");
-                return r;
-            }
+            // 由 ResourceHandler 处理静态资源的 If-Modified-Since/Last-Modified 比较。
+            // 这里不要做通用的基于请求头的直接返回，以免干扰其他路由的正确判断。
             // 真的找不到
             // 路径命中但方法不对
             boolean hasPath = routeTable.keySet().stream()
